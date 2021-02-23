@@ -27,7 +27,6 @@ package fzf
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/junegunn/fzf/src/util"
@@ -44,6 +43,8 @@ Matcher  -> EvtHeader         -> Terminal (update header)
 
 // Run starts fzf
 func Run(opts *Options, version string, revision string) {
+	opts.StartProfile()
+
 	sort := opts.Sort > 0
 	sortCriteria = opts.Criteria
 
@@ -53,7 +54,7 @@ func Run(opts *Options, version string, revision string) {
 		} else {
 			fmt.Println(version)
 		}
-		os.Exit(exitOk)
+		util.Exit(exitOk)
 	}
 
 	// Event channel
@@ -138,9 +139,7 @@ func Run(opts *Options, version string, revision string) {
 	streamingFilter := opts.Filter != nil && !sort && !opts.Tac && !opts.Sync
 	var reader *Reader
 	if !streamingFilter {
-		reader = NewReader(func(data []byte) bool {
-			return chunkList.Push(data)
-		}, eventBox, opts.ReadZero, opts.Filter == nil)
+		reader = NewReader(chunkList.Push, eventBox, opts.ReadZero, opts.Filter == nil)
 		go reader.ReadSource()
 	}
 
@@ -200,9 +199,9 @@ func Run(opts *Options, version string, revision string) {
 			}
 		}
 		if found {
-			os.Exit(exitOk)
+			util.Exit(exitOk)
 		}
-		os.Exit(exitNoMatch)
+		util.Exit(exitNoMatch)
 	}
 
 	// Synchronous search
@@ -322,9 +321,9 @@ func Run(opts *Options, version string, revision string) {
 										opts.Printer(val.Get(i).item.AsString(opts.Ansi))
 									}
 									if count > 0 {
-										os.Exit(exitOk)
+										util.Exit(exitOk)
 									}
-									os.Exit(exitNoMatch)
+									util.Exit(exitNoMatch)
 								}
 								deferred = false
 								terminal.startChan <- true

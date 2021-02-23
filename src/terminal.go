@@ -1803,7 +1803,7 @@ func (t *Terminal) killPreview(code int) {
 	case t.killChan <- code:
 	default:
 		if code != exitCancel {
-			os.Exit(code)
+			util.Exit(code)
 		}
 	}
 }
@@ -1983,7 +1983,7 @@ func (t *Terminal) Loop() {
 								case code := <-t.killChan:
 									if code != exitCancel {
 										util.KillCommand(cmd)
-										os.Exit(code)
+										util.Exit(code)
 									} else {
 										timer := time.NewTimer(previewCancelWait)
 										select {

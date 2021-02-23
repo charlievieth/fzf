@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/junegunn/fzf/src/algo"
 	"github.com/junegunn/fzf/src/tui"
+	"github.com/junegunn/fzf/src/util"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/mattn/go-shellwords"
@@ -228,6 +231,10 @@ type Options struct {
 	Tabstop     int
 	ClearOnExit bool
 	Version     bool
+
+	CPUProfile     string
+	cpuProfileFile *os.File
+	MEMProfile     string
 }
 
 func defaultPreviewOpts(command string) previewOpts {
@@ -287,17 +294,19 @@ func defaultOptions() *Options {
 		Unicode:     true,
 		Tabstop:     8,
 		ClearOnExit: true,
-		Version:     false}
+		Version:     false,
+		CPUProfile:  "",
+	}
 }
 
 func help(code int) {
 	os.Stdout.WriteString(usage)
-	os.Exit(code)
+	util.Exit(code)
 }
 
 func errorExit(msg string) {
 	os.Stderr.WriteString(msg + "\n")
-	os.Exit(exitError)
+	util.Exit(exitError)
 }
 
 func optString(arg string, prefixes ...string) (bool, string) {
@@ -398,11 +407,11 @@ func delimiterRegexp(str string) Delimiter {
 }
 
 func isAlphabet(char uint8) bool {
-	return char >= 'a' && char <= 'z'
+	return 'a' <= char && char <= 'z'
 }
 
 func isNumeric(char uint8) bool {
-	return char >= '0' && char <= '9'
+	return '0' <= char && char <= '9'
 }
 
 func parseAlgo(str string) algo.Algo {
@@ -1396,6 +1405,10 @@ func parseOptions(opts *Options, allArgs []string) {
 			opts.ClearOnExit = false
 		case "--version":
 			opts.Version = true
+		case "--cpuprofile":
+			opts.CPUProfile = nextString(allArgs, &i, "file path required")
+		case "--memprofile":
+			opts.MEMProfile = nextString(allArgs, &i, "file path required")
 		default:
 			if match, value := optString(arg, "--algo="); match {
 				opts.FuzzyAlgo = parseAlgo(value)
@@ -1583,6 +1596,46 @@ func postProcessOptions(opts *Options) {
 	}
 }
 
+func (o *Options) StartProfile() error {
+	if o.CPUProfile != "" {
+		f, err := os.OpenFile(o.CPUProfile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0655)
+		if err != nil {
+			return fmt.Errorf("could not create CPU profile: %w", err)
+		}
+
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return fmt.Errorf("could not start CPU profile: %w", err)
+		}
+		o.cpuProfileFile = f
+
+		util.AtExit(func() {
+			pprof.StopCPUProfile()
+			if err := o.cpuProfileFile.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing cpuprofile:", err)
+			}
+		})
+	}
+
+	if o.MEMProfile != "" {
+		f, err := os.OpenFile(o.MEMProfile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0655)
+		if err != nil {
+			return fmt.Errorf("could not create MEM profile: %w", err)
+		}
+		util.AtExit(func() {
+			runtime.GC()
+			if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: could not write MEM profile:", err)
+			}
+			// m.deps.WriteProfileTo("allocs", f, 0)
+			if err := f.Close(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: closing memprofile:", err)
+			}
+		})
+	}
+
+	return nil
+}
+
 // ParseOptions parses command-line options
 func ParseOptions() *Options {
 	opts := defaultOptions()
@@ -1597,5 +1650,6 @@ func ParseOptions() *Options {
 	parseOptions(opts, os.Args[1:])
 
 	postProcessOptions(opts)
+
 	return opts
 }
