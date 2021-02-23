@@ -1895,6 +1895,7 @@ func (t *Terminal) killPreview(code int) {
 	default:
 		if code != exitCancel {
 			t.eventBox.Set(EvtQuit, code)
+			// util.Exit(code) // TODO(charlie): do we still need this?
 		}
 	}
 }
@@ -2082,6 +2083,7 @@ func (t *Terminal) Loop() {
 									if code != exitCancel {
 										util.KillCommand(cmd)
 										t.eventBox.Set(EvtQuit, code)
+										// util.Exit(code) // TODO(charlie): do we still need this?
 									} else {
 										// We can immediately kill a long-running preview program
 										// once we started rendering its partial output
