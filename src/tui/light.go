@@ -36,32 +36,50 @@ func (r *LightRenderer) stderr(str string) {
 }
 
 // FIXME: Need better handling of non-displayable characters
-func (r *LightRenderer) stderrInternal(str string, allowNLCR bool) {
-	bytes := []byte(str)
-	runes := []rune{}
-	for len(bytes) > 0 {
-		r, sz := utf8.DecodeRune(bytes)
-		nlcr := r == '\n' || r == '\r'
-		if r >= 32 || r == '\x1b' || nlcr {
-			if r == utf8.RuneError || nlcr && !allowNLCR {
-				runes = append(runes, ' ')
-			} else {
-				runes = append(runes, r)
+func (rr *LightRenderer) stderrInternal(str string, allowNLCR bool) {
+	rr.queued.Grow(len(str))
+	if allowNLCR {
+		for _, r := range str {
+			if r == utf8.RuneError {
+				rr.queued.WriteByte(' ')
+			} else if r >= 32 || r == '\x1b' || r == '\n' || r == '\r' {
+				rr.queued.WriteRune(r)
 			}
 		}
-		bytes = bytes[sz:]
+	} else {
+		for _, r := range str {
+			if r == utf8.RuneError || r == '\n' || r == '\r' {
+				rr.queued.WriteByte(' ')
+			} else if r >= 32 || r == '\x1b' {
+				rr.queued.WriteRune(r)
+			}
+		}
 	}
-	r.queued.WriteString(string(runes))
+}
+
+func (r *LightRenderer) csiInt(n int, code string) {
+	r.queued.WriteString("\x1b[")
+	r.queued.Write(strconv.AppendInt(nil, int64(n), 10))
+	if len(code) == 1 && code[0] < utf8.RuneSelf {
+		r.queued.WriteByte(code[0])
+	} else {
+		r.stderr(code)
+	}
 }
 
 func (r *LightRenderer) csi(code string) {
-	r.stderr("\x1b[" + code)
+	r.queued.WriteString("\x1b[")
+	if len(code) == 1 && code[0] < utf8.RuneSelf {
+		r.queued.WriteByte(code[0])
+	} else {
+		r.stderr(code)
+	}
 }
 
 func (r *LightRenderer) flush() {
-	if r.queued.Len() > 0 {
-		fmt.Fprint(os.Stderr, r.queued.String())
-		r.queued.Reset()
+	if r.queued.Len() != 0 {
+		r.queued.WriteTo(os.Stderr)
+		r.queued.Reset() // WARN: new
 	}
 }
 
@@ -83,7 +101,7 @@ type LightRenderer struct {
 	escDelay      int
 	fullscreen    bool
 	upOneLine     bool
-	queued        strings.Builder
+	queued        bytes.Buffer
 	y             int
 	x             int
 	maxHeightFunc func(int) int
@@ -127,11 +145,20 @@ func NewLightRenderer(theme *ColorTheme, forceBlack bool, mouse bool, tabstop in
 	return &r
 }
 
+// len == 128
+const repeatSpaces = "                                " +
+	"                                " +
+	"                                " +
+	"                                "
+
 func repeat(r rune, times int) string {
-	if times > 0 {
-		return strings.Repeat(string(r), times)
+	if times == 0 {
+		return ""
 	}
-	return ""
+	if r == ' ' && times < len(repeatSpaces) {
+		return repeatSpaces[:times]
+	}
+	return strings.Repeat(string(r), times)
 }
 
 func atoi(s string, defaultValue int) int {
@@ -177,7 +204,7 @@ func (r *LightRenderer) Init() {
 	if r.mouse {
 		r.csi("?1000h")
 	}
-	r.csi(fmt.Sprintf("%dA", r.MaxY()-1))
+	r.csiInt(r.MaxY()-1, "A")
 	r.csi("G")
 	r.csi("K")
 	if !r.clearOnExit && !r.fullscreen {
@@ -196,13 +223,13 @@ func (r *LightRenderer) makeSpace() {
 func (r *LightRenderer) move(y int, x int) {
 	// w.csi("u")
 	if r.y < y {
-		r.csi(fmt.Sprintf("%dB", y-r.y))
+		r.csiInt(y-r.y, "B")
 	} else if r.y > y {
-		r.csi(fmt.Sprintf("%dA", r.y-y))
+		r.csiInt(r.y-y, "A")
 	}
 	r.stderr("\r")
 	if x > 0 {
-		r.csi(fmt.Sprintf("%dC", x))
+		r.csiInt(x, "C")
 	}
 	r.y = y
 	r.x = x
@@ -805,10 +832,17 @@ func (w *LightWindow) MoveAndClear(y int, x int) {
 }
 
 func attrCodes(attr Attr) []string {
-	codes := []string{}
 	if (attr & AttrClear) > 0 {
-		return codes
+		return nil
 	}
+	n := 0
+	for _, a := range []Attr{Bold, Dim, Italic, Underline, Blink, Reverse} {
+		if attr&a != 0 {
+			n++
+		}
+	}
+	codes := make([]string, 0, n)
+
 	if (attr & Bold) > 0 {
 		codes = append(codes, "1")
 	}
@@ -830,34 +864,62 @@ func attrCodes(attr Attr) []string {
 	return codes
 }
 
-func colorCodes(fg Color, bg Color) []string {
-	codes := []string{}
-	appendCode := func(c Color, offset int) {
-		if c == colDefault {
-			return
-		}
-		if c.is24() {
-			r := (c >> 16) & 0xff
-			g := (c >> 8) & 0xff
-			b := (c) & 0xff
-			codes = append(codes, fmt.Sprintf("%d;2;%d;%d;%d", 38+offset, r, g, b))
-		} else if c >= colBlack && c <= colWhite {
-			codes = append(codes, fmt.Sprintf("%d", int(c)+30+offset))
-		} else if c > colWhite && c < 16 {
-			codes = append(codes, fmt.Sprintf("%d", int(c)+90+offset-8))
-		} else if c >= 16 && c < 256 {
-			codes = append(codes, fmt.Sprintf("%d;5;%d", 38+offset, c))
-		}
+const colorOffsetFG = 0
+const colorOffsetBG = 10
+
+func colorCode(c Color, offset int) string {
+	if c == colDefault {
+		return ""
 	}
-	appendCode(fg, 0)
-	appendCode(bg, 10)
-	return codes
+	if c.is24() {
+		r := (c >> 16) & 0xff
+		g := (c >> 8) & 0xff
+		b := (c) & 0xff
+		return fmt.Sprintf("%d;2;%d;%d;%d", 38+offset, r, g, b)
+	}
+	if c >= colBlack && c <= colWhite {
+		return strconv.Itoa(int(c) + 30 + offset)
+	}
+	if c > colWhite && c < 16 {
+		return strconv.Itoa(int(c) + 90 + offset - 8)
+	}
+	if c >= 16 && c < 256 {
+		return fmt.Sprintf("%d;5;%d", 38+offset, c)
+	}
+	return ""
 }
 
 func (w *LightWindow) csiColor(fg Color, bg Color, attr Attr) bool {
-	codes := append(attrCodes(attr), colorCodes(fg, bg)...)
-	w.csi(";" + strings.Join(codes, ";") + "m")
-	return len(codes) > 0
+	var b strings.Builder
+	ac := attrCodes(attr)
+	fc := colorCode(fg, colorOffsetFG)
+	bc := colorCode(bg, colorOffsetBG)
+	n := len(ac) + 2
+	for _, s := range ac {
+		n += len(s)
+	}
+	if fc != "" {
+		n += len(fc) + 1
+	}
+	if bc != "" {
+		n += len(bc) + 1
+	}
+	b.Grow(n)
+	for _, s := range ac {
+		b.WriteByte(';')
+		b.WriteString(s)
+	}
+	if fc != "" {
+		b.WriteByte(';')
+		b.WriteString(fc)
+	}
+	if bc != "" {
+		b.WriteByte(';')
+		b.WriteString(bc)
+	}
+	b.WriteByte('m')
+	w.csi(b.String())
+	return len(ac) > 0 || fc != "" || bc != ""
 }
 
 func (w *LightWindow) Print(text string) {
