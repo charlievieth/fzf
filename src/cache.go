@@ -7,13 +7,13 @@ type queryCache map[string][]Result
 
 // ChunkCache associates Chunk and query string to lists of items
 type ChunkCache struct {
-	mutex sync.Mutex
+	mutex sync.RWMutex
 	cache map[*Chunk]*queryCache
 }
 
 // NewChunkCache returns a new ChunkCache
 func NewChunkCache() ChunkCache {
-	return ChunkCache{sync.Mutex{}, make(map[*Chunk]*queryCache)}
+	return ChunkCache{cache: make(map[*Chunk]*queryCache)}
 }
 
 // Add adds the list to the cache
@@ -23,33 +23,27 @@ func (cc *ChunkCache) Add(chunk *Chunk, key string, list []Result) {
 	}
 
 	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
 	qc, ok := cc.cache[chunk]
 	if !ok {
-		cc.cache[chunk] = &queryCache{}
-		qc = cc.cache[chunk]
+		qc = &queryCache{}
+		cc.cache[chunk] = qc
 	}
 	(*qc)[key] = list
+	cc.mutex.Unlock()
 }
 
 // Lookup is called to lookup ChunkCache
-func (cc *ChunkCache) Lookup(chunk *Chunk, key string) []Result {
+func (cc *ChunkCache) Lookup(chunk *Chunk, key string) (result []Result) {
 	if len(key) == 0 || !chunk.IsFull() {
 		return nil
 	}
 
-	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
-	qc, ok := cc.cache[chunk]
-	if ok {
-		list, ok := (*qc)[key]
-		if ok {
-			return list
-		}
+	cc.mutex.RLock()
+	if qc, ok := cc.cache[chunk]; ok {
+		result = (*qc)[key]
 	}
-	return nil
+	cc.mutex.RUnlock()
+	return result
 }
 
 func (cc *ChunkCache) Search(chunk *Chunk, key string) []Result {
@@ -57,25 +51,23 @@ func (cc *ChunkCache) Search(chunk *Chunk, key string) []Result {
 		return nil
 	}
 
-	cc.mutex.Lock()
-	defer cc.mutex.Unlock()
-
-	qc, ok := cc.cache[chunk]
-	if !ok {
-		return nil
-	}
-
-	for idx := 1; idx < len(key); idx++ {
-		// [---------| ] | [ |---------]
-		// [--------|  ] | [  |--------]
-		// [-------|   ] | [   |-------]
-		prefix := key[:len(key)-idx]
-		suffix := key[idx:]
-		for _, substr := range [2]string{prefix, suffix} {
-			if cached, found := (*qc)[substr]; found {
-				return cached
+	cc.mutex.RLock()
+	if qc, ok := cc.cache[chunk]; ok {
+		for idx := 1; idx < len(key); idx++ {
+			// [---------| ] | [ |---------]
+			// [--------|  ] | [  |--------]
+			// [-------|   ] | [   |-------]
+			prefix := key[:len(key)-idx]
+			suffix := key[idx:]
+			for _, substr := range [2]string{prefix, suffix} {
+				if cached, found := (*qc)[substr]; found {
+					cc.mutex.RUnlock()
+					return cached
+				}
 			}
 		}
 	}
+	cc.mutex.RUnlock()
+
 	return nil
 }
