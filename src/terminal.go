@@ -575,12 +575,12 @@ func NewTerminal(opts *Options, eventBox *util.EventBox) *Terminal {
 func (t *Terminal) parsePrompt(prompt string) (func(), int) {
 	var state *ansiState
 	trimmed, colors, _ := extractColor(prompt, state, nil)
-	item := &Item{text: util.ToChars([]byte(trimmed)), colors: colors}
+	item := &Item{text: util.ToChars(trimmed), colors: colors}
 
 	// "Prompt>  "
 	//  -------    // Do not apply ANSI attributes to the trailing whitespaces
 	//             // unless the part has a non-default ANSI state
-	loc := whiteSuffix.FindStringIndex(trimmed)
+	loc := whiteSuffix.FindIndex(trimmed)
 	if loc != nil {
 		blankState := ansiOffset{[2]int32{int32(loc[0]), int32(loc[1])}, ansiState{-1, -1, tui.AttrClear, -1}}
 		if item.colors != nil {
@@ -599,7 +599,7 @@ func (t *Terminal) parsePrompt(prompt string) (func(), int) {
 		t.printHighlighted(
 			Result{item: item}, tui.ColPrompt, tui.ColPrompt, false, false)
 	}
-	_, promptLen := t.processTabs([]rune(trimmed), 0)
+	_, promptLen := t.processTabs(item.text.ToRunes(), 0)
 
 	return output, promptLen
 }
@@ -1098,7 +1098,7 @@ func (t *Terminal) printHeader() {
 		trimmed, colors, newState := extractColor(lineStr, state, nil)
 		state = newState
 		item := &Item{
-			text:   util.ToChars([]byte(trimmed)),
+			text:   util.ToChars(trimmed),
 			colors: colors}
 
 		t.move(line, 2, true)

@@ -203,7 +203,8 @@ func TestExtractColor(t *testing.T) {
 	var state *ansiState
 	clean := "\x1b[0m"
 	check := func(assertion func(ansiOffsets *[]ansiOffset, state *ansiState)) {
-		output, ansiOffsets, newState := extractColor(src, state, nil)
+		b, ansiOffsets, newState := extractColor(src, state, nil)
+		output := string(b)
 		state = newState
 		if output != "hello world" {
 			t.Errorf("Invalid output: %s %v", output, []rune(output))

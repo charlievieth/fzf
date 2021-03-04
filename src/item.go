@@ -35,8 +35,10 @@ func (item *Item) Colors() []ansiOffset {
 func (item *Item) AsString(stripAnsi bool) string {
 	if item.origText != nil {
 		if stripAnsi {
+			// TODO (CEV): it's safe to convert trimmed to a string here
+			// using unsafe.Pointer
 			trimmed, _, _ := extractColor(string(*item.origText), nil, nil)
-			return trimmed
+			return string(trimmed)
 		}
 		return string(*item.origText)
 	}

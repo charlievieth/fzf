@@ -72,14 +72,14 @@ func Run(opts *Options, version string, revision string) {
 				prevLineAnsiState = lineAnsiState
 				trimmed, offsets, newState := extractColor(string(data), lineAnsiState, nil)
 				lineAnsiState = newState
-				return util.ToChars([]byte(trimmed)), offsets
+				return util.ToChars(trimmed), offsets
 			}
 		} else {
 			// When color is disabled but ansi option is given,
 			// we simply strip out ANSI codes from the input
 			ansiProcessor = func(data []byte) (util.Chars, *[]ansiOffset) {
 				trimmed, _, _ := extractColor(string(data), nil, nil)
-				return util.ToChars([]byte(trimmed)), nil
+				return util.ToChars(trimmed), nil
 			}
 		}
 	}

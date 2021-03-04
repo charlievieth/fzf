@@ -186,7 +186,7 @@ Loop:
 	return -1, -1
 }
 
-func extractColor(str string, state *ansiState, proc func(string, *ansiState) bool) (string, *[]ansiOffset, *ansiState) {
+func extractColor(str string, state *ansiState, proc func(string, *ansiState) bool) ([]byte, *[]ansiOffset, *ansiState) {
 	// We append to a stack allocated variable that we'll
 	// later copy and return, to save on allocations.
 	offsets := make([]ansiOffset, 0, 32)
@@ -197,7 +197,7 @@ func extractColor(str string, state *ansiState, proc func(string, *ansiState) bo
 
 	var (
 		pstate    *ansiState // lazily allocated
-		output    strings.Builder
+		output    []byte
 		prevIdx   int
 		runeCount int
 	)
@@ -213,7 +213,7 @@ func extractColor(str string, state *ansiState, proc func(string, *ansiState) bo
 		// Check if we should continue
 		prev := str[prevIdx:start]
 		if proc != nil && !proc(prev, state) {
-			return "", nil, nil
+			return nil, nil, nil
 		}
 		prevIdx = idx
 
@@ -221,10 +221,10 @@ func extractColor(str string, state *ansiState, proc func(string, *ansiState) bo
 			runeCount += utf8.RuneCountInString(prev)
 			// Grow the buffer size to the maximum possible length (string length
 			// containing ansi codes) to avoid repetitive allocation
-			if output.Cap() == 0 {
-				output.Grow(len(str))
+			if output == nil {
+				output = make([]byte, 0, len(str))
 			}
-			output.WriteString(prev)
+			output = append(output, prev...)
 		}
 
 		newState := interpretCode(str[start:idx], state)
@@ -253,15 +253,15 @@ func extractColor(str string, state *ansiState, proc func(string, *ansiState) bo
 	}
 
 	var rest string
-	var trimmed string
+	var trimmed []byte
 	if prevIdx == 0 {
 		// No ANSI code found
 		rest = str
-		trimmed = str
+		trimmed = []byte(str)
 	} else {
 		rest = str[prevIdx:]
-		output.WriteString(rest)
-		trimmed = output.String()
+		output = append(output, rest...)
+		trimmed = output
 	}
 	if proc != nil {
 		proc(rest, state)
