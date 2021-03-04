@@ -130,11 +130,6 @@ func (m *Matcher) sliceChunks(chunks []*Chunk) [][]*Chunk {
 	return slices
 }
 
-type partialResult struct {
-	index   int
-	matches []Result
-}
-
 func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 	startedAt := time.Now()
 
@@ -148,12 +143,13 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 	}
 
 	cancelled := util.NewAtomicBool(false)
+	defer cancelled.Set(true)
 
 	slices := m.sliceChunks(request.chunks)
-	numSlices := len(slices)
-	resultChan := make(chan partialResult, numSlices)
-	countChan := make(chan int, numChunks)
+	matchSema := make(chan struct{}, numChunks)
 	waitGroup := sync.WaitGroup{}
+
+	partialResults := make([][]Result, len(slices))
 
 	for idx, chunks := range slices {
 		waitGroup.Add(1)
@@ -161,51 +157,38 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 			m.slab[idx] = util.MakeSlab(slab16Size, slab32Size)
 		}
 		go func(idx int, slab *util.Slab, chunks []*Chunk) {
-			defer func() { waitGroup.Done() }()
-			count := 0
-			allMatches := make([][]Result, len(chunks))
-			for idx, chunk := range chunks {
+			defer waitGroup.Done()
+			var all []Result
+			for _, chunk := range chunks {
 				matches := request.pattern.Match(chunk, slab)
-				allMatches[idx] = matches
-				count += len(matches)
 				if cancelled.Get() {
 					return
 				}
-				countChan <- len(matches)
-			}
-			sliceMatches := make([]Result, 0, count)
-			for _, matches := range allMatches {
-				sliceMatches = append(sliceMatches, matches...)
+				all = append(all, matches...)
+				matchSema <- struct{}{}
 			}
 			if m.sort {
 				if m.tac {
-					sort.Sort(ByRelevanceTac(sliceMatches))
+					sort.Sort(ByRelevanceTac(all))
 				} else {
-					sort.Sort(ByRelevance(sliceMatches))
+					sort.Sort(ByRelevance(all))
 				}
 			}
-			resultChan <- partialResult{idx, sliceMatches}
+			partialResults[idx] = all
 		}(idx, m.slab[idx], chunks)
 	}
 
-	wait := func() bool {
-		cancelled.Set(true)
-		waitGroup.Wait()
-		return true
-	}
-
 	count := 0
-	matchCount := 0
-	for matchesInChunk := range countChan {
+	for range matchSema {
 		count++
-		matchCount += matchesInChunk
-
 		if count == numChunks {
 			break
 		}
 
 		if m.reqBox.Peek(reqReset) {
-			return nil, wait()
+			cancelled.Set(true)
+			waitGroup.Wait()
+			return nil, true
 		}
 
 		if time.Since(startedAt) > progressMinDuration {
@@ -213,11 +196,7 @@ func (m *Matcher) scan(request MatchRequest) (*Merger, bool) {
 		}
 	}
 
-	partialResults := make([][]Result, numSlices)
-	for range slices {
-		partialResult := <-resultChan
-		partialResults[partialResult.index] = partialResult.matches
-	}
+	waitGroup.Wait()
 	return NewMerger(pattern, partialResults, m.sort, m.tac), false
 }
 
